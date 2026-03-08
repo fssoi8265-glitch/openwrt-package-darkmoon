@@ -45,25 +45,23 @@ jobs:
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.version }}
-          PACKAGES: cake-autorate-reborn
+          PACKAGES: darkmoon
           IGNORE_ERRORS: 0 
           
       - name: Collect Packages
         run: |
           mkdir -p dist
           
-          # Only find packages that have "autorate-reborn" in the name
-          for file in $(find bin/packages/ -type f \( -name "*autorate-reborn*.apk" -o -name "*autorate-reborn*.ipk" \)); do
+          # Find packages with "darkmoon" and copy them with arch prefix
+          for file in $(find bin/packages/ -type f \( -name "*darkmoon*.apk" -o -name "*darkmoon*.ipk" \)); do
             filename=$(basename "$file")
-            
-            # Prefix the architecture to the filename so they don't overwrite each other
             cp "$file" "dist/${{ matrix.arch }}_${filename}"
           done
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cake-autorate-${{ matrix.arch }}-${{ matrix.version }}
+          name: darkmoon-${{ matrix.arch }}-${{ matrix.version }}
           path: dist/*
           
       - name: Add to GitHub Release
