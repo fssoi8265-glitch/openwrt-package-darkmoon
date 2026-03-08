@@ -86,9 +86,25 @@
 
 /* ── Internal state ──────────────────────────────────────────────────── */
 
+/*
+ * Cache the qdisc opts per interface so that the emergency
+ * fallback "add" path in tc_cake_set_bandwidth() can recreate the qdisc
+ * with all CAKE options preserved (diffserv, flow mode, NAT, wash, etc.)
+ * rather than a bare bandwidth-only qdisc.
+ *
+ * We store up to NL_CACHED_IFACES (ifindex, opts) pairs.  In practice
+ * the daemon uses at most 2 (DL IFB + UL WAN).
+ */
+#define NL_CACHED_IFACES 4
+
 struct tc_nl_ctx {
     int      fd;
     uint32_t seq;
+
+    /* Per-interface opts cache (populated by tc_dl_setup / tc_ul_setup) */
+    unsigned int      cached_ifindex[NL_CACHED_IFACES];
+    cake_qdisc_opts_t cached_opts[NL_CACHED_IFACES];
+    int               cached_count;
 };
 
 /* ── Buffer sizes ────────────────────────────────────────────────────── */
@@ -176,26 +192,73 @@ static int nl_transact(tc_nl_ctx_t *ctx, char *buf, int msg_len)
                (struct sockaddr *)&dst, sizeof(dst)) < 0)
         return -1;
 
+    /*
+     * Loop until we receive the ACK for *our* sequence number.
+     * An unsolicited netlink notification (link-up/down event, kernel
+     * route change) arriving before the ACK would otherwise be silently
+     * parsed as our response, corrupting the return value.
+     */
+    uint32_t sent_seq = nlh->nlmsg_seq;
     char rbuf[NL_RECV_SIZE];
-    ssize_t n = recv(ctx->fd, rbuf, sizeof(rbuf), 0);
-    if (n < (ssize_t)NLMSG_HDRLEN)
-        return -1;
+    for (;;) {
+        ssize_t n = recv(ctx->fd, rbuf, sizeof(rbuf), 0);
+        if (n < (ssize_t)NLMSG_HDRLEN)
+            return -1;
 
-    struct nlmsghdr *ack = (struct nlmsghdr *)rbuf;
-    if (ack->nlmsg_type != NLMSG_ERROR)
-        return -1;
-    if ((size_t)n < NLMSG_HDRLEN + sizeof(struct nlmsgerr))
-        return -1;
+        struct nlmsghdr *ack = (struct nlmsghdr *)rbuf;
 
-    struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(ack);
-    if (err->error != 0) {
-        errno = -err->error;
-        return err->error;   /* negative errno */
+        /* Discard any message that isn't our ACK */
+        if (ack->nlmsg_seq != sent_seq)
+            continue;
+
+        if (ack->nlmsg_type != NLMSG_ERROR)
+            return -1;
+        if ((size_t)n < NLMSG_HDRLEN + sizeof(struct nlmsgerr))
+            return -1;
+
+        struct nlmsgerr *err = (struct nlmsgerr *)NLMSG_DATA(ack);
+        if (err->error != 0) {
+            errno = -err->error;
+            return err->error;   /* negative errno */
+        }
+        return 0;
     }
-    return 0;
 }
 
 /* ── Socket lifecycle ────────────────────────────────────────────────── */
+
+/* Store opts for an interface, replacing any existing entry for that ifindex */
+static void tc__cache_opts(tc_nl_ctx_t *ctx, unsigned int ifindex,
+                            const cake_qdisc_opts_t *opts)
+{
+    if (!opts) return;
+
+    /* Update existing entry if present */
+    for (int i = 0; i < ctx->cached_count; i++) {
+        if (ctx->cached_ifindex[i] == ifindex) {
+            ctx->cached_opts[i] = *opts;
+            return;
+        }
+    }
+
+    /* Add new entry if there is room */
+    if (ctx->cached_count < NL_CACHED_IFACES) {
+        ctx->cached_ifindex[ctx->cached_count] = ifindex;
+        ctx->cached_opts[ctx->cached_count]    = *opts;
+        ctx->cached_count++;
+    }
+}
+
+/* Look up cached opts for an ifindex; returns NULL if not found */
+static const cake_qdisc_opts_t *tc__lookup_opts(const tc_nl_ctx_t *ctx,
+                                                  unsigned int ifindex)
+{
+    for (int i = 0; i < ctx->cached_count; i++) {
+        if (ctx->cached_ifindex[i] == ifindex)
+            return &ctx->cached_opts[i];
+    }
+    return NULL;
+}
 
 tc_nl_ctx_t *tc_nl_open(void)
 {
@@ -600,18 +663,18 @@ int tc_cake_set_bandwidth(tc_nl_ctx_t *ctx,
     /* kbps → bytes/sec: kbps * 1000 / 8 = kbps * 125 */
     uint64_t rate_Bps = (uint64_t)rate_kbps * 125ULL;
 
-    /* Step 1: modify existing root CAKE qdisc in-place (no NLM_F_CREATE). */
+    /* Modify existing root CAKE qdisc in-place (no NLM_F_CREATE). */
     int ret = tc__cake_qdisc_op(ctx, ifindex, TC_H_ROOT, rate_Bps, NULL, 0);
     if (ret == 0)
         return 0;
 
     /*
-     * Step 2: if the qdisc is absent (ENOENT), create it.
-     * This should not normally happen during runtime because tc_ul_setup /
-     * tc_dl_setup already created the qdisc at startup.
+     * Use cached opts so all CAKE options (diffserv, flow mode,
+     * NAT, wash, overhead, etc.) are preserved – not just the rate.
      */
     if (errno == ENOENT) {
-        ret = tc__cake_qdisc_op(ctx, ifindex, TC_H_ROOT, rate_Bps, NULL,
+        const cake_qdisc_opts_t *saved = tc__lookup_opts(ctx, ifindex);
+        ret = tc__cake_qdisc_op(ctx, ifindex, TC_H_ROOT, rate_Bps, saved,
                                 NLM_F_CREATE | NLM_F_EXCL);
         if (ret == 0)
             return 0;
@@ -688,6 +751,10 @@ int tc_dl_setup(tc_nl_ctx_t            *ctx,
         syslog(LOG_ERR, "tc_dl_setup: CAKE qdisc on '%s': %m", ifb_if);
         return -1;
     }
+
+    /* Cache the DL opts so tc_cake_set_bandwidth fallback can use them */
+    if (opts_dl)
+        tc__cache_opts(ctx, ifb_idx, opts_dl);
 
     /* ── 4. Ingress qdisc on WAN ─────────────────────────────── */
     ret = tc__ingress_add(ctx, wan_idx);
@@ -779,6 +846,10 @@ int tc_ul_setup(tc_nl_ctx_t            *ctx,
         syslog(LOG_ERR, "tc_ul_setup: CAKE qdisc on '%s': %m", wan_if);
         return -1;
     }
+
+    /* Cache the UL opts so tc_cake_set_bandwidth fallback can use them */
+    if (opts_ul)
+        tc__cache_opts(ctx, wan_idx, opts_ul);
 
     syslog(LOG_INFO, "tc_ul_setup: UL path ready (%s @ %u kbps)",
            wan_if, rate_kbps);

@@ -30,6 +30,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <net/if.h>
 #include <netinet/ip.h>
 #include <netinet/ip_icmp.h>
 
@@ -139,11 +140,12 @@ typedef struct {
     int64_t  t_last_decay_us[2];
 
     /* OWD sliding window (allocated to cfg.bufferbloat_detection_window) */
-    int64_t *dl_delays;
-    int64_t *ul_delays;
+    int     *dl_delays;
+    int     *ul_delays;
     int64_t *dl_owd_deltas_us;
     int64_t *ul_owd_deltas_us;
     int      delays_idx;
+    int      delays_fill;
     int64_t  sum_dl_delays;
     int64_t  sum_ul_delays;
     int64_t  sum_dl_owd_deltas_us;
@@ -181,6 +183,10 @@ typedef struct {
     /* Track whether setup succeeded (for teardown) */
     int dl_setup_done;
     int ul_setup_done;
+
+    /* Feature: interface up/down recovery (if_up_check_interval_us) */
+    struct uloop_timeout if_up_timer;
+    int                  link_up;        /* 1 = WAN interface is currently up */
 } autorate_t;
 
 /* ────────────────────────────────────────────────────────────── */
@@ -422,14 +428,20 @@ static void adjust_shaper_rate(autorate_t *ar, int dir, int64_t t_now_us)
 
         int64_t avg = ar->avg_owd_delta_us[dir];
         int64_t factor;
-        if (avg <= delay_thr) {
+        /*
+         *   avg <= max_up_thr (10ms) → full rate increase (1.04×)
+         *   max_up_thr < avg < delay_thr (30ms) → interpolate down
+         *   avg >= delay_thr → no increase (1.00×)
+         */
+        if (avg <= max_up_thr) {
             factor = c->shaper_rate_max_adjust_up_load_high;
-        } else if (avg < max_up_thr) {
+        } else if (avg < delay_thr && max_up_thr < delay_thr) {
+            /* interpolate from max down to min as avg approaches delay_thr */
             factor = c->shaper_rate_max_adjust_up_load_high
                 - (c->shaper_rate_max_adjust_up_load_high
                    - c->shaper_rate_min_adjust_up_load_high)
-                * (avg - delay_thr)
-                / (max_up_thr - delay_thr);
+                * (avg - max_up_thr)
+                / (delay_thr - max_up_thr);
         } else {
             factor = c->shaper_rate_min_adjust_up_load_high;
         }
@@ -542,8 +554,15 @@ static void process_owd(autorate_t *ar,
 
     ar->delays_idx = (idx + 1) % bdw;
 
-    ar->avg_owd_delta_us[DIR_DL] = ar->sum_dl_owd_deltas_us / bdw;
-    ar->avg_owd_delta_us[DIR_UL] = ar->sum_ul_owd_deltas_us / bdw;
+    /* Use the actual number of samples collected (capped at bdw)
+     * to avoid dividing the sum by the full window during warmup, which
+     * artificially deflates the average and suppresses rate increases. */
+    if (ar->delays_fill < bdw)
+        ar->delays_fill++;
+    int divisor = ar->delays_fill;
+
+    ar->avg_owd_delta_us[DIR_DL] = ar->sum_dl_owd_deltas_us / divisor;
+    ar->avg_owd_delta_us[DIR_UL] = ar->sum_ul_owd_deltas_us / divisor;
 
     ar->bufferbloat_detected[DIR_DL] =
         (ar->sum_dl_delays >= c->bufferbloat_detection_thr);
@@ -907,7 +926,9 @@ static int start_pinger(autorate_t *ar)
     ar->icmp_ufd.cb = icmp_reply_cb;
     uloop_fd_add(&ar->icmp_ufd, ULOOP_READ | ULOOP_EDGE_TRIGGER);
 
-    ar->ping_id     = (uint16_t)(getpid() ^ ((uint16_t)time(NULL)));
+    /* Use getpid() only — PIDs are unique per instance, so XOR-ing
+     * with time(NULL) only introduces collision risk on fast reboots. */
+    ar->ping_id     = (uint16_t)(getpid() & 0xFFFF);
     ar->ping_seq    = 0;
     ar->ping_rr_idx = 0;
 
@@ -1108,8 +1129,8 @@ static void rate_timer_cb(struct uloop_timeout *t)
 static int init_windows(autorate_t *ar)
 {
     int w = ar->cfg.bufferbloat_detection_window;
-    ar->dl_delays        = calloc((size_t)w, sizeof(int64_t));
-    ar->ul_delays        = calloc((size_t)w, sizeof(int64_t));
+    ar->dl_delays        = calloc((size_t)w, sizeof(int));
+    ar->ul_delays        = calloc((size_t)w, sizeof(int));
     ar->dl_owd_deltas_us = calloc((size_t)w, sizeof(int64_t));
     ar->ul_owd_deltas_us = calloc((size_t)w, sizeof(int64_t));
     return (ar->dl_delays && ar->ul_delays &&
@@ -1126,6 +1147,95 @@ static void handle_signal(int sig)
 }
 
 /* ────────────────────────────────────────────────────────────── */
+/*  Interface up/down recovery (if_up_check_interval_us)          */
+/* ────────────────────────────────────────────────────────────── */
+/*
+ * if_up_timer_cb – polls for WAN interface presence every
+ * if_up_check_interval_us microseconds.
+ *
+ * On PPPoE/DHCP reconnects the WAN interface disappears and reappears.
+ * While it is absent we pause pinging and rate adjustments so the daemon
+ * does not burn through all spare reflectors or drive rates to their
+ * minimums on a link that is simply renegotiating.
+ *
+ * When the interface comes back we re-run cake_setup() to recreate the
+ * CAKE qdiscs and restart the pinger from scratch.
+ */
+static void if_up_timer_cb(struct uloop_timeout *t)
+{
+    autorate_t    *ar = container_of(t, autorate_t, if_up_timer);
+    cake_config_t *c  = &ar->cfg;
+
+    int iface_present = (if_nametoindex(c->ul_if) != 0);
+
+    if (!iface_present && ar->link_up) {
+        /* Interface just disappeared */
+        ar->link_up = 0;
+        syslog(LOG_WARNING,
+               "WAN interface '%s' disappeared – pausing rate control",
+               c->ul_if);
+
+        /* Stop pinger so we don't flood with unanswerable pings */
+        stop_pinger(ar);
+
+        /* Tear down CAKE qdiscs; they will be recreated on recovery */
+        cake_teardown(ar);
+
+        /* Reset shaper rates to base so we start fresh on reconnect */
+        ar->shaper_rate_kbps[DIR_DL] = c->base_dl_shaper_rate_kbps;
+        ar->shaper_rate_kbps[DIR_UL] = c->base_ul_shaper_rate_kbps;
+
+    } else if (iface_present && !ar->link_up) {
+        /* Interface just came back up */
+        syslog(LOG_INFO,
+               "WAN interface '%s' reappeared – resuming rate control",
+               c->ul_if);
+
+        if (cake_setup(ar) < 0) {
+            syslog(LOG_ERR,
+                   "if_up: CAKE re-setup failed on '%s', will retry",
+                   c->ul_if);
+            /* Don't flip link_up; retry next interval */
+        } else {
+            ar->link_up = 1;
+
+            /* Reset OWD state so the new link gets a fresh baseline */
+            int bdw = c->bufferbloat_detection_window;
+            memset(ar->dl_delays,        0, (size_t)bdw * sizeof(*ar->dl_delays));
+            memset(ar->ul_delays,        0, (size_t)bdw * sizeof(*ar->ul_delays));
+            memset(ar->dl_owd_deltas_us, 0, (size_t)bdw * sizeof(*ar->dl_owd_deltas_us));
+            memset(ar->ul_owd_deltas_us, 0, (size_t)bdw * sizeof(*ar->ul_owd_deltas_us));
+            ar->delays_idx             = 0;
+            ar->delays_fill            = 0;
+            ar->sum_dl_delays          = 0;
+            ar->sum_ul_delays          = 0;
+            ar->sum_dl_owd_deltas_us   = 0;
+            ar->sum_ul_owd_deltas_us   = 0;
+            ar->global_last_response_us = 0;
+
+            for (int i = 0; i < ar->no_active_reflectors; i++) {
+                reflector_t *r = &ar->reflectors[i];
+                r->dl_owd_baseline_us   = 0;
+                r->ul_owd_baseline_us   = 0;
+                r->dl_owd_delta_ewma_us = 0;
+                r->ul_owd_delta_ewma_us = 0;
+                r->last_response_us     = 0;
+                memset(r->offences, 0, sizeof(r->offences));
+                r->sum_offences = 0;
+                r->offences_idx = 0;
+            }
+
+            if (start_pinger(ar) < 0)
+                syslog(LOG_ERR, "if_up: failed to restart pinger: %m");
+        }
+    }
+
+    int interval_ms = (int)(c->if_up_check_interval_us / 1000);
+    if (interval_ms < 1000) interval_ms = 1000;  /* minimum 1 s */
+    uloop_timeout_set(t, interval_ms);
+}
+
+/* ────────────────────────────────────────────────────────────── */
 /*  main                                                          */
 /* ────────────────────────────────────────────────────────────── */
 int main(int argc, char *argv[])
@@ -1136,7 +1246,9 @@ int main(int argc, char *argv[])
 
     autorate_t ar;
     memset(&ar, 0, sizeof(ar));
-    ar.icmp_sock = -1;
+    ar.icmp_sock  = -1;
+    ar.rm.rx_fd   = -1;
+    ar.rm.tx_fd   = -1;
 
     /* ── Load configuration ──────────────────────────────────── */
     if (config_load(section, &ar.cfg) < 0) {
@@ -1175,6 +1287,7 @@ int main(int argc, char *argv[])
     /* Initial shaper rates */
     ar.shaper_rate_kbps[DIR_DL] = ar.cfg.base_dl_shaper_rate_kbps;
     ar.shaper_rate_kbps[DIR_UL] = ar.cfg.base_ul_shaper_rate_kbps;
+    ar.link_up = 1;  /* assume up at start; if_up_timer will correct if wrong */
 
     ar.ping_response_interval_us =
         ar.cfg.reflector_ping_interval_us / ar.no_active_reflectors;
@@ -1217,6 +1330,14 @@ int main(int argc, char *argv[])
     uloop_timeout_set(&ar.health_timer,
         (int)(ar.cfg.reflector_health_check_interval_us / 1000));
 
+    /* Feature: interface recovery – only arm if interval is configured */
+    if (ar.cfg.if_up_check_interval_us > 0) {
+        ar.if_up_timer.cb = if_up_timer_cb;
+        int if_up_ms = (int)(ar.cfg.if_up_check_interval_us / 1000);
+        if (if_up_ms < 1000) if_up_ms = 1000;
+        uloop_timeout_set(&ar.if_up_timer, if_up_ms);
+    }
+
     syslog(LOG_INFO, "started instance '%s' dl=%s ul=%s ping_type=%s",
            section, ar.cfg.dl_if, ar.cfg.ul_if,
            ar.cfg.ping_type == 1 ? "ICMP-timestamp(13)" : "ICMP-echo(8)");
@@ -1229,6 +1350,7 @@ int main(int argc, char *argv[])
 
     uloop_timeout_cancel(&ar.rate_timer);
     uloop_timeout_cancel(&ar.health_timer);
+    uloop_timeout_cancel(&ar.if_up_timer);
     stop_pinger(&ar);
 
 err_teardown:

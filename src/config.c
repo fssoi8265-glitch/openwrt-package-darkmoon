@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <time.h>
 #include <limits.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <uci.h>
 
 /* ── helpers ─────────────────────────────────────────────────── */
@@ -389,9 +391,20 @@ int config_load(const char *section_name, cake_config_t *cfg)
             fclose(fp);
 
             /* Fisher-Yates shuffle so each daemon restart picks a different
-             * active set from the large pool. */
+             * active set from the large pool.
+             * Use /dev/urandom so rapid reboots within the same
+             * second don't produce the same reflector ordering every time. */
             if (count > 1) {
-                srand((unsigned int)time(NULL));
+                unsigned int seed;
+                int urfd = open("/dev/urandom", O_RDONLY);
+                if (urfd >= 0) {
+                    if (read(urfd, &seed, sizeof(seed)) != sizeof(seed))
+                        seed = (unsigned int)time(NULL); /* fallback */
+                    close(urfd);
+                } else {
+                    seed = (unsigned int)time(NULL);
+                }
+                srand(seed);
                 for (int i = count - 1; i > 0; i--) {
                     int j = rand() % (i + 1);
                     char tmp[64];
