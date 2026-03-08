@@ -45,7 +45,7 @@ jobs:
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.version }}
-          PACKAGES: cake-autorate-reborn
+          PACKAGES: darkmoon
           IGNORE_ERRORS: 0 
           
       - name: Collect Packages
@@ -63,7 +63,7 @@ jobs:
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cake-autorate-${{ matrix.arch }}-${{ matrix.version }}
+          name: darkmoon-${{ matrix.arch }}-${{ matrix.version }}
           path: dist/*
           
       - name: Add to GitHub Release
