@@ -827,12 +827,29 @@ int tc_ul_setup(tc_nl_ctx_t            *ctx,
 
     uint64_t rate_Bps = (uint64_t)rate_kbps * 125ULL;
 
-    /* Try in-place change first; create if absent.
-     * Falls back to standard CAKE if cake-mq module is not loaded. */
-    int ret = tc__cake_qdisc_op(ctx, wan_idx, TC_H_ROOT, rate_Bps, opts_ul, 0);
-    if (ret < 0 && errno == ENOENT)
-        ret = tc__cake_qdisc_op(ctx, wan_idx, TC_H_ROOT, rate_Bps, opts_ul,
+    /*
+     * Always delete any existing root qdisc before creating our CAKE qdisc.
+     *
+     * Rationale: the "change" path (RTM_NEWQDISC without NLM_F_CREATE) is
+     * unreliable for ensuring all CAKE opts are applied when:
+     *  (a) The existing qdisc is a different type (pfifo_fast, fq_codel …)
+     *      – the kernel returns 0 after a no-op or EINVAL, leaving the
+     *        wrong qdisc in place.
+     *  (b) The existing qdisc is CAKE but was created by SQM scripts without
+     *      overhead/MPU – CAKE's cake_change() may not reset already-zero
+     *      fields when the attribute is sent explicitly as 0.
+     *  (c) Wireless interfaces (phy/wlan) on OpenWrt often have a
+     *      per-driver default qdisc that is NOT replaced by a plain "change".
+     *
+     * Deleting first and creating fresh guarantees all opts are always applied.
+     * The brief moment without a shaper during setup is acceptable since this
+     * only runs at daemon start or interface recovery.
+     */
+    tc__qdisc_del(ctx, wan_idx, TC_H_ROOT, 0);  /* silently ignores ENOENT */
+
+    int ret = tc__cake_qdisc_op(ctx, wan_idx, TC_H_ROOT, rate_Bps, opts_ul,
                                 NLM_F_CREATE | NLM_F_EXCL);
+
     if (ret < 0 && errno == ENOENT && opts_ul && opts_ul->use_cake_mq) {
         syslog(LOG_WARNING,
                "tc_ul_setup: cake-mq not available on '%s', falling back to cake",
@@ -842,7 +859,20 @@ int tc_ul_setup(tc_nl_ctx_t            *ctx,
         ret = tc__cake_qdisc_op(ctx, wan_idx, TC_H_ROOT, rate_Bps, &fallback,
                                 NLM_F_CREATE | NLM_F_EXCL);
     }
-    if (ret < 0 && errno != EEXIST) {
+
+    if (ret < 0 && errno == EEXIST) {
+        /*
+         * Extremely unlikely race (another process created a qdisc between
+         * our delete and create).  Fall back to a change-in-place which will
+         * at least update the rate.
+         */
+        syslog(LOG_WARNING,
+               "tc_ul_setup: EEXIST race on '%s', applying change in-place",
+               wan_if);
+        ret = tc__cake_qdisc_op(ctx, wan_idx, TC_H_ROOT, rate_Bps, opts_ul, 0);
+    }
+
+    if (ret < 0) {
         syslog(LOG_ERR, "tc_ul_setup: CAKE qdisc on '%s': %m", wan_if);
         return -1;
     }

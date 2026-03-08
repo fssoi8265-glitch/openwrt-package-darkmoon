@@ -91,6 +91,11 @@ define Package/darkmoon/install
 	$(INSTALL_DATA) \
 		$(PKG_ROOT)/luci-app-darkmoon/www/luci-static/resources/view/darkmoon.js \
 		$(1)/www/luci-static/resources/view/
+
+	$(INSTALL_DIR) $(1)/www/luci-static/resources/view/status/include
+	$(INSTALL_DATA) \
+		$(PKG_ROOT)/luci-app-darkmoon/www/luci-static/resources/view/status/include/75_darkmoon.js \
+		$(1)/www/luci-static/resources/view/status/include/
 endef
 
 $(eval $(call BuildPackage,darkmoon))

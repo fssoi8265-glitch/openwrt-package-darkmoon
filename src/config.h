@@ -174,7 +174,8 @@ typedef struct {
     int      cake_diffserv;
 
     /*
-     * cake_flow_mode – per-flow / per-host isolation.
+     * cake_flow_mode – per-flow / per-host isolation (legacy: applies to both DL and UL
+     * when the direction-specific fields below are not set).
      *   CAKE_FLOW_TRIPLE (7) = triple isolation: src-host + dst-host + flow (default)
      *   CAKE_FLOW_HOSTS  (3) = per src+dst host pair
      *   CAKE_FLOW_FLOWS  (4) = per 5-tuple flow only
@@ -182,6 +183,20 @@ typedef struct {
      * UCI option: cake_flow_mode
      */
     int      cake_flow_mode;
+
+    /*
+     * cake_dl_flow_mode / cake_ul_flow_mode – direction-specific flow isolation.
+     *
+     * For asymmetric broadband, optimal settings differ:
+     *   DL (IFB/ingress): dual-dsthost (6) – isolate by destination (the local host)
+     *   UL (WAN/egress):  dual-srchost (5) – isolate by source (the local host)
+     *
+     * If set to -1 (default), falls back to cake_flow_mode.
+     *
+     * UCI options: cake_dl_flow_mode, cake_ul_flow_mode
+     */
+    int      cake_dl_flow_mode;   /* -1 = use cake_flow_mode */
+    int      cake_ul_flow_mode;   /* -1 = use cake_flow_mode */
 
     /*
      * cake_atm – ATM/PTM cell-size compensation.

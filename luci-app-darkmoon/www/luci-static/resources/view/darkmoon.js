@@ -183,11 +183,44 @@ return view.extend({
             o.value('4', _('precedence – legacy IP Precedence field'));
 
             o = s.taboption('qdisc', form.ListValue, 'cake_flow_mode',
-                _('Flow Isolation'),
-                _('Controls how CAKE identifies flows for fair-queuing.'));
+                _('Flow Isolation (shared default)'),
+                _('Fallback isolation mode used for both DL and UL when the ' +
+                  'direction-specific options below are not set.'));
             o.default = '7';
             o.value('7', _('triple – src host + dst host + 5-tuple flow (recommended)'));
             o.value('5', _('dual-srchost – per src host + flow'));
+            o.value('6', _('dual-dsthost – per dst host + flow'));
+            o.value('3', _('hosts – per src+dst host pair'));
+            o.value('4', _('flows – per 5-tuple flow only'));
+            o.value('0', _('none – no isolation'));
+
+            o = s.taboption('qdisc', form.ListValue, 'cake_dl_flow_mode',
+                _('Flow Isolation – Download (IFB/ingress)'),
+                _('Isolation for the IFB ingress qdisc. ' +
+                  'For asymmetric links, <strong>dual-dsthost</strong> is often better: ' +
+                  'it isolates per destination (local host), preventing any single ' +
+                  'LAN client from starving others on the download side. ' +
+                  'Leave at "-1 (use shared default)" to inherit from the setting above.'));
+            o.default = '-1';
+            o.value('-1', _('− use shared default above −'));
+            o.value('7', _('triple – src host + dst host + 5-tuple flow'));
+            o.value('6', _('dual-dsthost – per dst host + flow (recommended for DL)'));
+            o.value('5', _('dual-srchost – per src host + flow'));
+            o.value('3', _('hosts – per src+dst host pair'));
+            o.value('4', _('flows – per 5-tuple flow only'));
+            o.value('0', _('none – no isolation'));
+
+            o = s.taboption('qdisc', form.ListValue, 'cake_ul_flow_mode',
+                _('Flow Isolation – Upload (WAN/egress)'),
+                _('Isolation for the WAN egress qdisc. ' +
+                  'For asymmetric links, <strong>dual-srchost</strong> is often better: ' +
+                  'it isolates per source (local host), preventing any single ' +
+                  'LAN client from monopolising upload capacity. ' +
+                  'Leave at "-1 (use shared default)" to inherit from the setting above.'));
+            o.default = '-1';
+            o.value('-1', _('− use shared default above −'));
+            o.value('7', _('triple – src host + dst host + 5-tuple flow'));
+            o.value('5', _('dual-srchost – per src host + flow (recommended for UL)'));
             o.value('6', _('dual-dsthost – per dst host + flow'));
             o.value('3', _('hosts – per src+dst host pair'));
             o.value('4', _('flows – per 5-tuple flow only'));
@@ -488,7 +521,8 @@ return view.extend({
 
         /*
          * Inject the Start/Stop/Restart buttons directly into the DOM above
-         * the settings form.
+         * the settings form. Live status is shown on the Overview page only
+         * (via view/status/include/75_darkmoon.js).
          */
         return m.render().then(function(formNode) {
             var bar = E('div', { 'class': 'cbi-section' }, [

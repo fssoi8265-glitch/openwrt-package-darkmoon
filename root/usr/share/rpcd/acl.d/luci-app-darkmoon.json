@@ -3,9 +3,13 @@
         "description": "Grant access for luci-app-darkmoon",
         "read": {
             "uci": [ "darkmoon" ],
+            "file": {
+                "/var/run/darkmoon.json": [ "read", "stat" ]
+            },
             "ubus": {
+                "file":    [ "read", "stat" ],
                 "service": [ "list" ],
-                "luci": [ "getInitList", "getInitStatus", "setInitAction" ]
+                "luci":    [ "getInitList", "getInitStatus", "setInitAction" ]
             }
         },
         "write": {

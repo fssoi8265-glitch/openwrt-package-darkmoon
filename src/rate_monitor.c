@@ -124,8 +124,8 @@ int64_t rate_monitor_update(rate_monitor_t *rm,
                    ? (tx - rm->prev_tx_bytes)
                    : 0;
 
-    *out_dl_kbps = (uint32_t)((drx * 8000000ULL) / (uint64_t)elapsed);
-    *out_ul_kbps = (uint32_t)((dtx * 8000000ULL) / (uint64_t)elapsed);
+    *out_dl_kbps = (uint32_t)((drx * 8000ULL) / (uint64_t)elapsed);
+    *out_ul_kbps = (uint32_t)((dtx * 8000ULL) / (uint64_t)elapsed);
 
     rm->prev_rx_bytes = rx;
     rm->prev_tx_bytes = tx;

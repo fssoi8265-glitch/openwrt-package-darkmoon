@@ -187,6 +187,9 @@ typedef struct {
     /* Feature: interface up/down recovery (if_up_check_interval_us) */
     struct uloop_timeout if_up_timer;
     int                  link_up;        /* 1 = WAN interface is currently up */
+
+    /* Status file – written every rate-monitor tick for LuCI display */
+    int64_t t_started_us;       /* monotonic start time for uptime   */
 } autorate_t;
 
 /* ────────────────────────────────────────────────────────────── */
@@ -204,6 +207,89 @@ static void set_nonblocking(int fd)
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags >= 0)
         fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
+/* ────────────────────────────────────────────────────────────── */
+/*  Runtime status file  (/var/run/darkmoon.json)                  */
+/*                                                                */
+/*  Written on every rate-monitor tick (~200 ms).                 */
+/*  Read by the LuCI Overview widget via file.read RPC.           */
+/*  Uses atomic rename(tmp→final) to avoid partial reads.         */
+/* ────────────────────────────────────────────────────────────── */
+
+static const char *load_str(int cond)
+{
+    switch (cond) {
+        case LOAD_LOW:  return "low";
+        case LOAD_HIGH: return "high";
+        case LOAD_BB:   return "bufferbloat";
+        default:        return "idle";
+    }
+}
+
+static const char *state_str(int s)
+{
+    switch (s) {
+        case STATE_IDLE:  return "idle";
+        case STATE_STALL: return "stall";
+        default:          return "running";
+    }
+}
+
+static void write_status_file(autorate_t *ar)
+{
+    static const char *path     = "/var/run/darkmoon.json";
+    static const char *path_tmp = "/var/run/darkmoon.json.tmp";
+
+    FILE *f = fopen(path_tmp, "w");
+    if (!f)
+        return;
+
+    int64_t uptime_s   = (now_us() - ar->t_started_us) / 1000000LL;
+    long dl_owd_ms10   = (long)((ar->avg_owd_delta_us[DIR_DL] + 50LL) / 100LL);
+    long ul_owd_ms10   = (long)((ar->avg_owd_delta_us[DIR_UL] + 50LL) / 100LL);
+
+    fprintf(f,
+        "{\n"
+        "  \"instance\": \"%s\",\n"
+        "  \"state\": \"%s\",\n"
+        "  \"link_up\": %d,\n"
+        "  \"dl_if\": \"%s\",\n"
+        "  \"ul_if\": \"%s\",\n"
+        "  \"shaper_dl_kbps\": %u,\n"
+        "  \"shaper_ul_kbps\": %u,\n"
+        "  \"achieved_dl_kbps\": %u,\n"
+        "  \"achieved_ul_kbps\": %u,\n"
+        "  \"load_dl\": \"%s\",\n"
+        "  \"load_ul\": \"%s\",\n"
+        "  \"bb_dl\": %d,\n"
+        "  \"bb_ul\": %d,\n"
+        "  \"avg_owd_dl_ms10\": %ld,\n"
+        "  \"avg_owd_ul_ms10\": %ld,\n"
+        "  \"active_reflectors\": %d,\n"
+        "  \"uptime_s\": %lld\n"
+        "}\n",
+        ar->cfg.instance_id,
+        state_str(ar->main_state),
+        ar->link_up,
+        ar->cfg.dl_if,
+        ar->cfg.ul_if,
+        ar->shaper_rate_kbps[DIR_DL],
+        ar->shaper_rate_kbps[DIR_UL],
+        ar->achieved_rate_kbps[DIR_DL],
+        ar->achieved_rate_kbps[DIR_UL],
+        load_str(ar->load_condition[DIR_DL]),
+        load_str(ar->load_condition[DIR_UL]),
+        ar->bufferbloat_detected[DIR_DL],
+        ar->bufferbloat_detected[DIR_UL],
+        dl_owd_ms10,
+        ul_owd_ms10,
+        ar->no_active_reflectors,
+        (long long)uptime_s
+    );
+
+    fclose(f);
+    rename(path_tmp, path);
 }
 
 /* ────────────────────────────────────────────────────────────── */
@@ -228,7 +314,7 @@ static cake_qdisc_opts_t make_dl_opts(const cake_config_t *c)
     o.ingress    = 1;                 /* always set for IFB   */
     o.ack_filter = (uint32_t)c->cake_ack_filter;
     o.diffserv   = (uint32_t)c->cake_diffserv;
-    o.flow_mode  = (uint32_t)c->cake_flow_mode;
+    o.flow_mode  = (uint32_t)c->cake_dl_flow_mode;
     o.atm        = (uint32_t)c->cake_atm;
     o.rtt_us     = c->cake_rtt_us;
     o.split_gso  = (uint32_t)c->cake_split_gso;
@@ -253,7 +339,7 @@ static cake_qdisc_opts_t make_ul_opts(const cake_config_t *c)
     o.ingress    = 0;
     o.ack_filter = (uint32_t)c->cake_ack_filter;
     o.diffserv   = (uint32_t)c->cake_diffserv;
-    o.flow_mode  = (uint32_t)c->cake_flow_mode;
+    o.flow_mode  = (uint32_t)c->cake_ul_flow_mode;
     o.atm        = (uint32_t)c->cake_atm;
     o.rtt_us     = c->cake_rtt_us;
     o.split_gso  = (uint32_t)c->cake_split_gso;
@@ -1119,6 +1205,9 @@ static void rate_timer_cb(struct uloop_timeout *t)
         }
     }
 
+    /* Update LuCI status file every rate-monitor tick */
+    write_status_file(ar);
+
     int ms = (int)((next / 1000) & 0x7FFFFFFF);
     uloop_timeout_set(t, ms);
 }
@@ -1289,6 +1378,9 @@ int main(int argc, char *argv[])
     ar.shaper_rate_kbps[DIR_UL] = ar.cfg.base_ul_shaper_rate_kbps;
     ar.link_up = 1;  /* assume up at start; if_up_timer will correct if wrong */
 
+    /* Status file for LuCI – written every rate-monitor tick */
+    ar.t_started_us = now_us();
+
     ar.ping_response_interval_us =
         ar.cfg.reflector_ping_interval_us / ar.no_active_reflectors;
 
@@ -1352,6 +1444,9 @@ int main(int argc, char *argv[])
     uloop_timeout_cancel(&ar.health_timer);
     uloop_timeout_cancel(&ar.if_up_timer);
     stop_pinger(&ar);
+
+    /* Remove status file so LuCI shows the service as stopped */
+    unlink("/var/run/darkmoon.json");
 
 err_teardown:
     /*

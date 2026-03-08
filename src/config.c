@@ -207,6 +207,8 @@ void config_set_defaults(cake_config_t *cfg)
     cfg->cake_ack_filter = 0;   /* CAKE_ACK_NONE       – off; safest default */
     cfg->cake_diffserv   = 1;   /* CAKE_DIFFSERV_DIFFSERV4 – 4-tin           */
     cfg->cake_flow_mode  = 7;   /* CAKE_FLOW_TRIPLE    – triple isolation     */
+    cfg->cake_dl_flow_mode = -1; /* -1 = inherit from cake_flow_mode          */
+    cfg->cake_ul_flow_mode = -1; /* -1 = inherit from cake_flow_mode          */
     cfg->cake_atm        = 0;   /* CAKE_ATM_NONE       – no ATM cells         */
     cfg->cake_rtt_us     = 0;              /* CAKE default 100 ms      */
     cfg->cake_split_gso  = 1;             /* split GSO ON             */
@@ -346,6 +348,26 @@ int config_load(const char *section_name, cake_config_t *cfg)
     UCI_INT(cake_ack_filter, "cake_ack_filter");
     UCI_INT(cake_diffserv,   "cake_diffserv");
     UCI_INT(cake_flow_mode,  "cake_flow_mode");
+
+    /*
+     * Direction-specific flow isolation.  UCI value -1 (or absent) means
+     * "use cake_flow_mode".  We detect absence by checking whether the
+     * option string is present in UCI; if absent we leave the default (-1).
+     */
+    {
+        const char *_v = uci_get(ctx, sec, "cake_dl_flow_mode");
+        if (_v) cfg->cake_dl_flow_mode = (int)strtol(_v, NULL, 10);
+    }
+    {
+        const char *_v = uci_get(ctx, sec, "cake_ul_flow_mode");
+        if (_v) cfg->cake_ul_flow_mode = (int)strtol(_v, NULL, 10);
+    }
+
+    /* Resolve direction-specific values: fall back to cake_flow_mode if -1 */
+    if (cfg->cake_dl_flow_mode < 0)
+        cfg->cake_dl_flow_mode = cfg->cake_flow_mode;
+    if (cfg->cake_ul_flow_mode < 0)
+        cfg->cake_ul_flow_mode = cfg->cake_flow_mode;
     UCI_INT(cake_atm,        "cake_atm");
     UCI_INT(cake_split_gso,  "cake_split_gso");
     UCI_INT(cake_mq,         "cake_mq");
