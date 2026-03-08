@@ -33,7 +33,7 @@ function makeServiceButton(label, style, action) {
         'click': function(ev) {
             var btn = ev.currentTarget;
             btn.disabled = true;
-            return callInitAction('cake-autorate-reborn', action)
+            return callInitAction('darkmoon', action)
                 .then(function(res) {
                     btn.disabled = false;
                     ui.addNotification(null,
@@ -63,7 +63,7 @@ return view.extend({
      */
     load: function() {
         return Promise.all([
-            uci.load('cake_autorate_reborn'),
+            uci.load('darkmoon'),
             callFsStat('/sys/module/sch_cake_mq').catch(function() { return ''; })
         ]);
     },
@@ -82,7 +82,7 @@ return view.extend({
     handleSaveApply: function(ev, mode) {
         return this.handleSave(ev).then(function() {
             return ui.changes.apply(mode).then(function() {
-                return callInitAction('cake-autorate-reborn', 'restart')
+                return callInitAction('darkmoon', 'restart')
                     .catch(function() { /* ignore if service not present yet */ });
             });
         });
@@ -92,17 +92,17 @@ return view.extend({
         var cakeMqAvailable = (data[1] !== '');
         var m, s, o;
 
-        m = new form.Map('cake_autorate_reborn', _('CAKE Autorate Reborn'),
+        m = new form.Map('darkmoon', _('Darkmoon'),
             _('Adaptive CAKE shaper – automatically adjusts download and upload ' +
               'bandwidth based on measured one-way delay (OWD). ' +
               'Standalone operation: no sqm-scripts required.'));
 
         /* ── Per-instance configuration sections ───────────── */
-        uci.sections('cake_autorate_reborn', 'cake_autorate_reborn').forEach(function(section) {
+        uci.sections('darkmoon', 'darkmoon').forEach(function(section) {
             var sid   = section['.name'];
             var title = sid.charAt(0).toUpperCase() + sid.slice(1) + ' ' + _('Instance');
 
-            s = m.section(form.NamedSection, sid, 'cake_autorate_reborn', title);
+            s = m.section(form.NamedSection, sid, 'darkmoon', title);
             s.addremove = false;
             s.anonymous = false;
 
@@ -289,7 +289,7 @@ return view.extend({
                   '<a href="https://github.com/tievolu/timestamp-reflectors" target="_blank">' +
                   'github.com/tievolu/timestamp-reflectors</a>.<br>' +
                   'Leave blank to use the Reflectors list.'));
-            o.placeholder = '/etc/cake-autorate/timestamp-reflectors.txt';
+            o.placeholder = '/etc/darkmoon/timestamp-reflectors.txt';
 
             /* ── Pinger tuning ────────────────────────────── */
             o = s.taboption('advanced', form.Value, 'no_pingers',

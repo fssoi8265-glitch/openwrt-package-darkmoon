@@ -1,4 +1,4 @@
-config cake_autorate_reborn 'primary'
+config darkmoon 'primary'
     # ── Enable / disable ─────────────────────────────────────
     option enabled '0'
 
@@ -110,7 +110,7 @@ config cake_autorate_reborn 'primary'
     # Leave blank to use the list above.
     #
     # Example:
-    #   option reflectors_file '/etc/cake-autorate/timestamp-reflectors.txt'
+    #   option reflectors_file '/etc/darkmoon/timestamp-reflectors.txt'
     option reflectors_file ''
 
     # ── CAKE qdisc options ───────────────────────────────────

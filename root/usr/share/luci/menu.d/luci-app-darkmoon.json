@@ -1,0 +1,10 @@
+{
+    "admin/services/darkmoon": {
+        "title": "Darkmoon",
+        "order": 60,
+        "action": {
+            "type": "view",
+            "path": "darkmoon"
+        }
+    }
+}

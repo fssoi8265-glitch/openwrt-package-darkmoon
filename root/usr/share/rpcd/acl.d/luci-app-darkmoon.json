@@ -1,15 +1,15 @@
 {
-    "luci-app-cake-autorate-reborn": {
-        "description": "Grant access for luci-app-cake-autorate-reborn",
+    "luci-app-darkmoon": {
+        "description": "Grant access for luci-app-darkmoon",
         "read": {
-            "uci": [ "cake_autorate_reborn" ],
+            "uci": [ "darkmoon" ],
             "ubus": {
                 "service": [ "list" ],
                 "luci": [ "getInitList", "getInitStatus", "setInitAction" ]
             }
         },
         "write": {
-            "uci": [ "cake_autorate_reborn" ],
+            "uci": [ "darkmoon" ],
             "ubus": {
                 "luci": [ "setInitAction" ]
             }

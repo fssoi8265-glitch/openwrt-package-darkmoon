@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
-PKG_NAME    := cake-autorate-reborn
-PKG_VERSION := 1.0.2
+PKG_NAME    := darkmoon
+PKG_VERSION := 1.0.0
 PKG_RELEASE := 1
 
 PKG_LICENSE         := GPL-2.0-or-later
@@ -13,16 +13,16 @@ include $(INCLUDE_DIR)/package.mk
 # $(CURDIR) is always the package directory regardless of SDK nesting depth.
 PKG_ROOT := $(CURDIR)/..
 
-define Package/cake-autorate-reborn
+define Package/darkmoon
   SECTION  := net
   CATEGORY := Network
-  TITLE    := CAKE Autorate Reborn
+  TITLE    := Darkmoon
   DEPENDS  := +libubox +libuci +kmod-ifb +kmod-sched-cake \
               +kmod-sched-core +luci-base \
               +CAKE_MQ:kmod-sched-cake-mq
 endef
 
-define Package/cake-autorate-reborn/description
+define Package/darkmoon/description
   Adaptive CAKE qdisc bandwidth controller for OpenWrt, with integrated
   LuCI web interface.  Standalone - no sqm-scripts required.
 
@@ -30,19 +30,19 @@ define Package/cake-autorate-reborn/description
   Manages the full IFB + CAKE plumbing lifecycle via netlink.
 endef
 
-define Package/cake-autorate-reborn/postinst
+define Package/darkmoon/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
-/etc/init.d/cake-autorate-reborn enable
-/etc/init.d/cake-autorate-reborn start
+/etc/init.d/darkmoon enable
+/etc/init.d/darkmoon start
 exit 0
 endef
 
-define Package/cake-autorate-reborn/prerm
+define Package/darkmoon/prerm
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
-/etc/init.d/cake-autorate-reborn stop
-/etc/init.d/cake-autorate-reborn disable
+/etc/init.d/darkmoon stop
+/etc/init.d/darkmoon disable
 exit 0
 endef
 
@@ -62,35 +62,35 @@ define Build/Compile
 		CFLAGS="$(TARGET_CFLAGS) -O2 -pipe -I$(STAGING_DIR)/usr/include" \
 		LDFLAGS="$(TARGET_LDFLAGS) -L$(STAGING_DIR)/usr/lib -lubox -luci"
 	$(TARGET_CROSS)strip --strip-unneeded \
-		$(PKG_BUILD_DIR)/cake-autorate-reborn
+		$(PKG_BUILD_DIR)/darkmoon
 endef
 
-define Package/cake-autorate-reborn/install
+define Package/darkmoon/install
 	$(INSTALL_DIR) $(1)/usr/sbin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/cake-autorate-reborn $(1)/usr/sbin/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/darkmoon $(1)/usr/sbin/
 
 	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_BIN) $(PKG_ROOT)/root/etc/init.d/cake-autorate-reborn \
+	$(INSTALL_BIN) $(PKG_ROOT)/root/etc/init.d/darkmoon \
 		$(1)/etc/init.d/
 
 	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) $(PKG_ROOT)/root/etc/config/cake_autorate_reborn \
+	$(INSTALL_CONF) $(PKG_ROOT)/root/etc/config/darkmoon \
 		$(1)/etc/config/
 
 	$(INSTALL_DIR) $(1)/usr/share/luci/menu.d
 	$(INSTALL_DATA) \
-		$(PKG_ROOT)/root/usr/share/luci/menu.d/luci-app-cake-autorate-reborn.json \
+		$(PKG_ROOT)/root/usr/share/luci/menu.d/luci-app-darkmoon.json \
 		$(1)/usr/share/luci/menu.d/
 
 	$(INSTALL_DIR) $(1)/usr/share/rpcd/acl.d
 	$(INSTALL_DATA) \
-		$(PKG_ROOT)/root/usr/share/rpcd/acl.d/luci-app-cake-autorate-reborn.json \
+		$(PKG_ROOT)/root/usr/share/rpcd/acl.d/luci-app-darkmoon.json \
 		$(1)/usr/share/rpcd/acl.d/
 
 	$(INSTALL_DIR) $(1)/www/luci-static/resources/view
 	$(INSTALL_DATA) \
-		$(PKG_ROOT)/luci-app-cake-autorate-reborn/www/luci-static/resources/view/cake-autorate-reborn.js \
+		$(PKG_ROOT)/luci-app-darkmoon/www/luci-static/resources/view/darkmoon.js \
 		$(1)/www/luci-static/resources/view/
 endef
 
-$(eval $(call BuildPackage,cake-autorate-reborn))
+$(eval $(call BuildPackage,darkmoon))

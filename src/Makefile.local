@@ -4,7 +4,7 @@ LDFLAGS ?= -lubox -luci
 
 SRCS = main.c config.c rate_monitor.c tc_netlink.c
 OBJS = $(SRCS:.c=.o)
-BIN  = cake-autorate-reborn
+BIN  = darkmoon
 
 .PHONY: all clean
 
