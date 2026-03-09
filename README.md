@@ -1,4 +1,4 @@
-# cake-autorate-reborn
+# darkmoon
 
 A lightweight, CPU-efficient C rewrite of [cake-autorate](https://github.com/lynxthecat/cake-autorate) for OpenWrt. Designed for routers where maximizing CPU efficiency is a priority.
 
@@ -8,7 +8,7 @@ The original [cake-autorate](https://github.com/lynxthecat/cake-autorate) create
 
 While the algorithm is excellent at mitigating bufferbloat, running a complex bash script that continuously spawns new processes and subshells can consume a significant amount of CPU on lower-end routers.
 
-**cake-autorate-reborn** resolves this by reimplementing the exact same algorithm as a native C binary and OpenWrt procd service. It drastically reduces CPU overhead while maintaining identical adaptive traffic-shaping behavior.
+**darkmoon** resolves this by reimplementing the exact same algorithm as a native C binary and OpenWrt procd service. It drastically reduces CPU overhead while maintaining identical adaptive traffic-shaping behavior.
 
 *All credit for the original algorithm, math, and concept goes to [@lynxthecat](https://github.com/lynxthecat) and the contributors of the original repository.*
 
@@ -16,102 +16,158 @@ While the algorithm is excellent at mitigating bufferbloat, running a complex ba
 
 ## Features
 
-- **Native C Implementation:** No bash scripts, no subshells, and minimal CPU footprint.
-- **Event-Driven Architecture:** Utilizes `libubox/uloop` to eliminate polling busy-loops.
-- **Efficient System I/O:** Reads network statistics directly from `/sys/class/net/.../statistics` rather than invoking shell commands.
-- **Direct Traffic Control:** Applies CAKE bandwidth changes directly via `tc qdisc change` without spawning an interactive shell.
-- **Asynchronous Pinging:** Uses a custom written pinger for less cpu cycles
-- **Dynamic Reflector Health:** Automatically monitors and replaces unresponsive ping targets.
-- **Flash Storage Safe:** All state data is kept in RAM. Zero flash writes occur during runtime.
-- **LuCI Web Interface:** Includes a fully integrated UI for configuring settings and controlling the service state.
+- **Native C implementation** — no bash scripts, no subshells, minimal CPU footprint
+- **Event-driven architecture** — uses `libubox/uloop` to eliminate polling busy-loops
+- **Direct CAKE management** — creates and manages IFB + CAKE qdiscs entirely via raw NETLINK_ROUTE, with no dependency on SQM scripts
+- **Efficient system I/O** — reads network statistics directly from `/sys/class/net/.../statistics`
+- **Asynchronous pinging** — custom ICMP pinger supporting both Echo (type 8) and Timestamp (type 13) modes
+- **Per-direction flow isolation** — separate CAKE `flow_mode` settings for DL ingress and UL egress
+- **Dynamic reflector health** — automatically monitors and replaces unresponsive ping targets
+- **Flash storage safe** — all state data kept in RAM, zero flash writes at runtime
+- **LuCI web interface** — fully integrated UI for configuration, service control, and live status
 
 ---
 
 ## How It Works
 
-The service continuously measures round-trip time utilizing `RTT/2` as a proxy for One-Way Delay (OWD). It maintains an asymmetric Exponentially Weighted Moving Average (EWMA) baseline for each reflector and classifies network load into four states:
+The daemon continuously measures latency using ICMP and maintains an asymmetric EWMA baseline per reflector to detect genuine bufferbloat versus normal variance. It classifies network load into four states and adjusts the CAKE shaper rate accordingly:
 
 | State | Condition | Action |
 | :--- | :--- | :--- |
-| **BUFFERBLOAT** | Delay spike detected above configured threshold | Reduces shaper rate aggressively |
-| **HIGH** | Achieved rate > (high_load_thr × shaper rate) | Increases shaper rate |
-| **LOW** | Achieved rate > connection_active_thr | Decays shaper rate toward base rate |
-| **IDLE** | Minimal to no traffic detected | Decays shaper rate toward base rate |
+| **BUFFERBLOAT** | OWD delta exceeds configured threshold | Reduces shaper rate aggressively |
+| **HIGH** | Achieved rate > `high_load_thr × shaper_rate` | Increases shaper rate |
+| **LOW** | Achieved rate > `connection_active_thr` | Decays shaper rate toward base rate |
+| **IDLE** | Minimal traffic detected | Decays shaper rate toward base rate |
+
+By default the daemon uses `ping_type 0` (ICMP Echo, RTT/2 as OWD proxy). For more accurate per-direction OWD on asymmetric links such as 5G/LTE, `ping_type 1` (ICMP Timestamp) is recommended where reflectors support it.
 
 ---
 
 ## Installation
 
 ### Prerequisites
-The service requires the following standard OpenWrt packages:
 
-    apk update
-    apk add libubox libuci
+```sh
+apk update
+apk add libubox libuci
+```
 
-Installing from Release
+### From a Release
 
-Download the appropriate .apk file for your architecture from the Releases page.
-Upload the file to your router and install:
+Download the appropriate `.apk` for your architecture from the Releases page, upload it to your router, and install:
 
-    apk add --allow-untrusted cake-autorate-reborn_*.apk
+```sh
+apk add --allow-untrusted darkmoon_*.apk
+```
 
 Enable and start the service:
 
-    /etc/init.d/cake-autorate-reborn enable
-    /etc/init.d/cake-autorate-reborn start
+```sh
+/etc/init.d/darkmoon enable
+/etc/init.d/darkmoon start
+```
 
-Compiling from Source
+### From Source (OpenWrt SDK)
 
-If you are building your own OpenWrt firmware, you can compile it via the SDK:
+```sh
+make package/darkmoon/compile V=s
+```
 
-    make package/cake-autorate-reborn/compile V=s
+---
 
-Configuration
+## Configuration
 
-The recommended way to configure the service is through the OpenWrt web interface by navigating to Services → CAKE Autorate Reborn. Clicking "Save & Apply" will automatically reload the daemon.
+The recommended way to configure darkmoon is through the LuCI web interface at **Services → Darkmoon**. Clicking Save & Apply will automatically reload the daemon.
 
-Alternatively, you can edit the configuration file via SSH:
+Alternatively, edit the config file directly over SSH:
 
-    vi /etc/config/cake_autorate_reborn
+```sh
+vi /etc/config/darkmoon
+```
 
-Important: Ensure that the dl_if and ul_if options match your router's actual interfaces. For typical OpenWrt SQM setups, download is handled by an IFB interface (e.g., ifb4wan) and upload is handled by the physical WAN interface (e.g., wan).
+The minimum required options are the interface names and rate limits. Ensure `dl_if` and `ul_if` match your router's actual interfaces — for typical setups, download traffic arrives on an IFB interface and upload on the physical WAN interface.
 
-    config cake_autorate_reborn 'primary'
-        option enabled                  '1'
-        option dl_if                    'ifb4wan'
-        option ul_if                    'wan'
-        option base_dl_shaper_rate_kbps '50000'
-        option base_ul_shaper_rate_kbps '20000'
-        option max_dl_shaper_rate_kbps  '100000'
-        option max_ul_shaper_rate_kbps  '35000'
+```
+config darkmoon 'primary'
+    option enabled                  '1'
+    option dl_if                    'ifb4wan'
+    option ul_if                    'wan'
+    option base_dl_shaper_rate_kbps '50000'
+    option base_ul_shaper_rate_kbps '20000'
+    option max_dl_shaper_rate_kbps  '100000'
+    option max_ul_shaper_rate_kbps  '35000'
+```
 
-Verification and Logging
+### CAKE Options
 
-To confirm the service is registered and running under procd:
+CAKE qdisc options such as `overhead`, `mpu`, `rtt`, `memlimit`, and `wash` are configured separately for DL and UL. Flow isolation mode can also be set independently per direction — for example `dual-dsthost` on ingress and `dual-srchost` on egress, which is the recommended setup for most home routers.
 
-    ubus call service list '{"name":"cake-autorate-reborn"}'
+### 5G / LTE Notes
 
-To monitor the daemon adjusting bandwidth or responding to connection stalls in real-time:
+On cellular links the UL scheduling latency is inherently higher and more variable than DL, even at idle, due to the base station grant request cycle. If your idle UL OWD delta appears elevated (5–10ms) with no load, this is normal radio behaviour and not a misconfiguration. Consider:
 
-    logread -f -e cake-autorate
+- Setting `ping_type 1` (ICMP Timestamp) for true per-direction OWD rather than RTT/2
+- Slightly raising `alpha_baseline_increase` (e.g. `0.005`) to let the baseline track the natural idle jitter floor of your link
 
-Credits
+---
 
-Original Algorithm & Concept: @lynxthecat — cake-autorate
+## Live Status
 
-C Rewrite & OpenWrt Integration: kamikaonashi
+The LuCI Overview page displays a live status widget that polls every 2.5 seconds. When the daemon is running it shows:
 
-License
+| Field | Description |
+| :--- | :--- |
+| Status | Current autorate state (Running / Idle / Stall) |
+| DL / UL Shaped | Current CAKE shaper rate |
+| DL / UL Actual | Measured achieved throughput |
+| DL / UL Load | Load classification (High / Low / Idle / Bufferbloat) |
+| OWD DL / UL Δ | One-way delay delta above baseline — turns red above +10ms |
+| Uptime | Time since daemon started |
+
+The daemon writes `/var/run/darkmoon.json` every ~200ms. The file is removed on clean shutdown so the widget immediately reflects stopped state.
+
+---
+
+## Verification and Logging
+
+Confirm the service is running under procd:
+
+```sh
+ubus call service list '{"name":"darkmoon"}'
+```
+
+Watch the daemon adjust bandwidth in real time:
+
+```sh
+logread -f -e darkmoon
+```
+
+Inspect the live status JSON directly:
+
+```sh
+cat /var/run/darkmoon.json
+```
+
+---
+
+## Credits
+
+Original algorithm & concept: [@lynxthecat](https://github.com/lynxthecat) — [cake-autorate](https://github.com/lynxthecat/cake-autorate)
+
+C rewrite & OpenWrt integration: kamikaonashi
+
+## License
 
 This project is released under the MIT License.
 
 The original cake-autorate project is licensed under its own terms. Please see the upstream repository for details.
 
+---
 
-Screenshots
+## Screenshots
+
 <img width="3343" height="1318" alt="Screenshot From 2026-02-26 17-26-41" src="https://github.com/user-attachments/assets/2dde3238-859f-4f90-86a1-b57384f253cf" />
 <img width="3343" height="1318" alt="Screenshot From 2026-02-26 17-26-46" src="https://github.com/user-attachments/assets/d9149822-3a21-4f3c-ab15-c09b0a83507b" />
 <img width="3343" height="1318" alt="Screenshot From 2026-02-26 17-26-54" src="https://github.com/user-attachments/assets/132e7d98-eaa3-4a2b-aaf8-70e37d1d5bab" />
 <img width="3343" height="1318" alt="Screenshot From 2026-02-26 17-26-59" src="https://github.com/user-attachments/assets/626c132d-e15a-48b2-850f-38aadf523412" />
 <img width="3343" height="1318" alt="Screenshot From 2026-02-26 17-27-04" src="https://github.com/user-attachments/assets/59adcf63-c6e1-4805-975c-619120fd4bf1" />
-
