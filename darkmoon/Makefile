@@ -33,6 +33,7 @@ endef
 define Package/darkmoon/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
+/etc/init.d/rpcd reload
 /etc/init.d/darkmoon enable
 /etc/init.d/darkmoon start
 exit 0

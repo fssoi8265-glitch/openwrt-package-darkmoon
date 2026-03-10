@@ -312,7 +312,7 @@ static cake_qdisc_opts_t make_dl_opts(const cake_config_t *c)
     o.nat        = c->cake_nat;
     o.wash       = 0;                 /* never wash on DL/IFB */
     o.ingress    = 1;                 /* always set for IFB   */
-    o.ack_filter = (uint32_t)c->cake_ack_filter;
+    o.ack_filter = 0;                 /* ACK filtering is UL-only */
     o.diffserv   = (uint32_t)c->cake_diffserv;
     o.flow_mode  = (uint32_t)c->cake_dl_flow_mode;
     o.atm        = (uint32_t)c->cake_atm;
@@ -384,11 +384,12 @@ static int cake_setup(autorate_t *ar)
                         c->ul_if,
                         ar->shaper_rate_kbps[DIR_UL],
                         &ul_opts) < 0) {
-            syslog(LOG_ERR, "cake_setup: UL path failed: %m");
-            return -1;
+            syslog(LOG_WARNING,
+                   "cake_setup: UL path deferred (will retry): %m");
+        } else {
+            ar->ul_setup_done = 1;
+            ar->last_shaper_rate_kbps[DIR_UL] = ar->shaper_rate_kbps[DIR_UL];
         }
-        ar->ul_setup_done = 1;
-        ar->last_shaper_rate_kbps[DIR_UL] = ar->shaper_rate_kbps[DIR_UL];
     }
 
     return 0;
@@ -455,8 +456,10 @@ static void set_shaper_rate(autorate_t *ar, int dir)
     int         adjust = (dir == DIR_DL) ? ar->cfg.adjust_dl_shaper_rate
                                          : ar->cfg.adjust_ul_shaper_rate;
 
-    if (adjust && iface[0] != '\0')
-        tc_cake_set_bandwidth(ar->tc_nl, iface, rate);
+    if (adjust && iface[0] != '\0') {
+        if (tc_cake_set_bandwidth(ar->tc_nl, iface, rate) < 0)
+            return;
+    }
 
     ar->last_shaper_rate_kbps[dir] = rate;
 }
@@ -1188,18 +1191,32 @@ static void rate_timer_cb(struct uloop_timeout *t)
      * intervals before logging, which suppresses single-sample glitches.
      */
     int64_t now = now_us();
-    if (ar->global_last_response_us > 0) {
+    {
         int64_t per_reflector_interval_us = c->reflector_ping_interval_us;
         int64_t stall_thr_us =
             (int64_t)c->stall_detection_thr * per_reflector_interval_us;
-        if (now - ar->global_last_response_us > stall_thr_us &&
+
+        int64_t last_response = ar->global_last_response_us > 0
+            ? ar->global_last_response_us
+            : ar->t_started_us;
+
+        if (now - last_response > stall_thr_us &&
             ar->achieved_rate_kbps[DIR_DL] < c->connection_stall_thr_kbps &&
             ar->achieved_rate_kbps[DIR_UL] < c->connection_stall_thr_kbps) {
             if (ar->main_state != STATE_STALL) {
                 ar->main_state = STATE_STALL;
-                syslog(LOG_WARNING, "connection stall detected");
+                if (ar->global_last_response_us == 0)
+                    syslog(LOG_WARNING,
+                           "no ping responses received since startup "
+                           "(ping_type=%d) – reflectors may not support "
+                           "this ICMP type; check reflector list or set "
+                           "ping_type=0 for ICMP Echo",
+                           c->ping_type);
+                else
+                    syslog(LOG_WARNING, "connection stall detected");
             }
-        } else if (ar->main_state == STATE_STALL) {
+        } else if (ar->main_state == STATE_STALL &&
+                   ar->global_last_response_us > 0) {
             ar->main_state = STATE_RUNNING;
             syslog(LOG_INFO, "connection recovered from stall");
         }
@@ -1316,6 +1333,16 @@ static void if_up_timer_cb(struct uloop_timeout *t)
 
             if (start_pinger(ar) < 0)
                 syslog(LOG_ERR, "if_up: failed to restart pinger: %m");
+        }
+
+    } else if (iface_present && ar->link_up && !ar->ul_setup_done &&
+               c->adjust_ul_shaper_rate && c->ul_if[0]) {
+        cake_qdisc_opts_t ul_opts = make_ul_opts(c);
+        if (tc_ul_setup(ar->tc_nl, c->ul_if,
+                        ar->shaper_rate_kbps[DIR_UL], &ul_opts) == 0) {
+            ar->ul_setup_done = 1;
+            ar->last_shaper_rate_kbps[DIR_UL] = ar->shaper_rate_kbps[DIR_UL];
+            syslog(LOG_INFO, "if_up: UL path ready on '%s'", c->ul_if);
         }
     }
 
