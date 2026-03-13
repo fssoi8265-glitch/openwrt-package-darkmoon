@@ -1,0 +1,107 @@
+# darkmoon gaming-ports.txt
+#
+# DSCP marking rules for latency-sensitive game and VoIP traffic.
+# Loaded by the darkmoon daemon at startup; changes take effect on restart.
+#
+# Format (one rule per line):
+#   <proto>  <port-or-range>  <dscp>
+#
+#   proto  : udp | tcp | both
+#   port   : single port (27015) or range (27015-27030)
+#   dscp   : ef | cs4 | cs5 | af41 | af42 | af43 | va | cs3 | cs6
+#            or a raw decimal DSCP value (0-63)
+#
+# Lines starting with '#' and blank lines are ignored.
+# Whitespace between fields is flexible (spaces or tabs).
+#
+# The daemon generates an nftables table (darkmoon_dscp) from these rules,
+# applying DSCP marks to both upload and download on the WAN interface.
+# CAKE's diffserv4 tins then prioritize accordingly:
+#   EF / VA / CS5  →  Voice tin    (strict priority, lowest latency)
+#   CS4 / AF41-43  →  Video tin    (high priority)
+#   CS0 / default  →  Best-Effort
+#
+# ── Valve / Steam ──────────────────────────────────────────────────────────
+# CS2, Dota 2, TF2, all Source engine games
+udp   27005          ef
+udp   27015-27030    ef
+udp   27036          ef
+# Steam Datagram Relay (SDR) – used by CS2 VAC, relay routing
+udp   4380           ef
+udp   27000-27004    ef
+udp   27031-27035    ef
+
+# ── Riot Games (Valorant, League of Legends, Teamfight Tactics) ────────────
+udp   7000-8000      ef
+udp   5000-5500      ef
+# Valorant dedicated game servers
+udp   7100-7200      ef
+
+# ── Epic Games (Fortnite, Rocket League) ──────────────────────────────────
+udp   9000-9100      ef
+udp   14000-14001    ef
+
+# ── Activision / Blizzard (Call of Duty, Overwatch, Diablo) ───────────────
+udp   3074           ef
+udp   3478-3480      ef
+udp   4000           ef
+udp   27014          ef
+# Battle.net game ports
+udp   1119           ef
+tcp   1119           ef
+
+# ── EA / Origin (Battlefield, Apex Legends, FIFA) ─────────────────────────
+udp   1024-1124      cs4
+udp   9988           cs4
+udp   17502          cs4
+udp   10000-10100    cs4
+
+# ── Ubisoft (Rainbow Six Siege, For Honor) ────────────────────────────────
+udp   10000-10099    ef
+udp   14000-14008    ef
+
+# ── Xbox Live / Microsoft Game Services ───────────────────────────────────
+udp   3074           ef
+udp   3544           ef
+udp   4500           ef
+tcp   3074           ef
+
+# ── PlayStation Network ────────────────────────────────────────────────────
+udp   3478-3480      ef
+udp   3658           ef
+tcp   3478-3480      ef
+
+# ── Nintendo Switch Online ─────────────────────────────────────────────────
+# Nintendo's known relay and matchmaking ports (narrowed from 1-65535)
+# The broad "udp 1-65535" rule has been intentionally removed – it marks
+# ALL UDP traffic including YouTube QUIC, causing false detection.
+udp   35000-36000    ef
+udp   45000-45100    ef
+
+# ── VoIP & Communication ──────────────────────────────────────────────────
+# Discord voice RTP – known relay server port range.
+# DO NOT use udp 50000-65535 here – that is the full ephemeral port range
+# and will match YouTube QUIC, Netflix, and general HTTPS/QUIC traffic.
+udp   50000-50019    ef
+# TeamSpeak
+udp   9987           ef
+tcp   30033          cs5
+# Mumble
+udp   64738          ef
+tcp   64738          cs5
+
+# ── Video Conferencing ────────────────────────────────────────────────────
+# Zoom media (RTP)
+udp   8801-8802      af41
+udp   3478-3479      af41
+# Microsoft Teams / Skype media (RTP)
+udp   50000-50019    af41
+tcp   50000-50059    af41
+# Google Meet / WebRTC (generic RTP range)
+udp   19302-19309    af41
+
+# ── Generic small UDP (optional – uncomment for best coverage)
+# Marks all small UDP packets as EF on the assumption that game state
+# updates are small. May cause false positives on DNS/NTP traffic.
+# Disable if you see unexpected activation of smart shaping at idle.
+# small-udp-ef

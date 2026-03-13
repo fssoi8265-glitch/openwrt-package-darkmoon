@@ -263,6 +263,80 @@ typedef struct {
      */
     int      ping_type;
 
+    /* ── darkmoon-shaper: smart shaping (Gaming & VoIP) ─────────
+     *
+     * When enabled, the daemon monitors the WAN interface for packets
+     * carrying latency-sensitive DSCP markings (gaming, VoIP, video
+     * conferencing).  While no such traffic is detected, CAKE is set
+     * to unlimited so bulk transfers get full line speed.  As soon as
+     * sensitive traffic appears and is confirmed for enable_delay seconds,
+     * CAKE shaping re-engages until disable_delay seconds of silence.
+     *
+     * Activation hysteresis (prevents false positives):
+     *   traffic seen for enable_delay_us  →  shaping ON
+     *   silence for   disable_delay_us   →  shaping OFF
+     *
+     * UCI option: smart_shaping_enabled (0/1)
+     */
+    int      smart_shaping_enabled;
+
+    /*
+     * smart_shaping_enable_delay_us – seconds of continuous sensitive traffic
+     * required before CAKE shaping is activated.  Prevents a single EF-marked
+     * packet (e.g. a DNS reply, OSPF Hello) from triggering shaping.
+     *
+     * Recommended: 2–5 s.  Default: 3 s.
+     * UCI option: smart_shaping_enable_delay_s
+     */
+    int64_t  smart_shaping_enable_delay_us;
+
+    /*
+     * smart_shaping_disable_delay_us – seconds of silence (no sensitive
+     * packets) before CAKE shaping is deactivated.  Prevents the shaper
+     * from flapping during brief pauses in gaming (loading screens, etc.).
+     *
+     * Recommended: 10–30 s.  Default: 10 s.
+     * UCI option: smart_shaping_disable_delay_s
+     */
+    int64_t  smart_shaping_disable_delay_us;
+
+    /*
+     * gaming_rules_file – path to a plain-text file of DSCP port-marking
+     * rules.  The daemon parses this at startup, generates an nftables
+     * table (darkmoon_dscp) and loads it.  The detection mask for the
+     * AF_PACKET sniffer is derived automatically from the DSCP values
+     * that appear in the file — no separate per-class flags are needed.
+     *
+     * File format: <proto>  <port-or-range>  <dscp>
+     *   e.g.  udp  27015-27030  ef
+     *
+     * Default: /etc/darkmoon/gaming-ports.txt
+     * UCI option: gaming_rules_file
+     */
+    char     gaming_rules_file[256];
+
+    /*
+     * smart_shaping_offload_enabled – when 1 and smart shaping is active,
+     * use a flowtable (hardware or software, auto-detected at startup) during
+     * idle periods to achieve maximum throughput.  CAKE is torn down while
+     * offload is active and re-created when gaming/VoIP is detected.
+     *
+     * Capability is probed at startup: hardware PPE first, then software
+     * flowtable, then none.  The result is written to the status JSON so
+     * LuCI can show or hide this option based on what the router supports.
+     *
+     * UCI option: smart_shaping_offload_enabled (0/1, default 0)
+     */
+    int      smart_shaping_offload_enabled;
+
+    /*
+     * lan_if – LAN bridge interface name for the flowtable device list.
+     * The flowtable must reference both WAN and LAN devices.
+     * Default: "br-lan"
+     * UCI option: lan_if
+     */
+    char     lan_if[32];
+
     /*
      * reflectors_file – path to a plain-text file of reflector IP addresses,
      * one per line. Lines starting with '#' and blank lines are ignored.
