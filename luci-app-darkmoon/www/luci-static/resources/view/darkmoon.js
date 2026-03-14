@@ -23,13 +23,6 @@ var callFsStat = rpc.declare({
     expect: { type: '' }
 });
 
-var callFileRead = rpc.declare({
-    object: 'file',
-    method: 'read',
-    params: [ 'path' ],
-    expect: { data: '' }
-});
-
 /*
  * makeServiceButton – returns a <button> DOM node that calls callInitAction,
  * disables itself while pending, and shows a success/error notification.
@@ -71,8 +64,7 @@ return view.extend({
     load: function() {
         return Promise.all([
             uci.load('darkmoon'),
-            callFsStat('/sys/module/sch_cake_mq').catch(function() { return ''; }),
-            callFileRead('/var/run/darkmoon.json').catch(function() { return ''; })
+            callFsStat('/sys/module/sch_cake_mq').catch(function() { return ''; })
         ]);
     },
 
@@ -98,17 +90,6 @@ return view.extend({
 
     render: function(data) {
         var cakeMqAvailable = (data[1] !== '');
-
-        /* Parse offload capability from the daemon's status JSON.
-         * 0 = not supported, 1 = software flowtable, 2 = hardware PPE.
-         * If the daemon isn't running yet, offloadCap stays 0 and the
-         * option is hidden (will appear after first daemon start). */
-        var offloadCap = 0;
-        try {
-            var st = JSON.parse(data[2]);
-            offloadCap = st.offload_capability || 0;
-        } catch (e) { /* daemon not running yet, status file absent */ }
-
         var m, s, o;
 
         m = new form.Map('darkmoon', _('Darkmoon'),
@@ -126,7 +107,6 @@ return view.extend({
             s.anonymous = false;
 
             s.tab('general',  _('General'));
-            s.tab('gaming',   _('Gaming & VoIP'));
             s.tab('qdisc',    _('CAKE Qdisc'));
             s.tab('advanced', _('Advanced'));
             s.tab('health',   _('Reflector Health'));
@@ -172,93 +152,6 @@ return view.extend({
             rateOption('general', 'max_ul_shaper_rate_kbps',   _('Max Upload Rate (kbps)'),   35000);
             rateOption('general', 'connection_active_thr_kbps',
                 _('Connection Active Threshold (kbps)'), 2000);
-
-            /* ════════════════════════════════════════════════
-             * Gaming & VoIP tab  –  darkmoon-shaper
-             *
-             * When enabled, CAKE shaping is only active while latency-
-             * sensitive traffic is detected on the WAN interface.
-             * During idle / bulk-only periods the shaper is bypassed
-             * so downloads and uploads run at full line speed.
-             * ════════════════════════════════════════════════ */
-
-            o = s.taboption('gaming', form.Flag, 'smart_shaping_enabled',
-                _('Enable Smart Shaping'),
-                _('Activate CAKE shaping <strong>only while gaming, VoIP, or ' +
-                  'video-conferencing traffic is present</strong>. ' +
-                  'During idle periods the shaper is bypassed and bulk ' +
-                  'transfers run at full line speed. ' +
-                  'Detection is based on DSCP markings in IP packet headers.'));
-            o.default  = '0';
-            o.rmempty  = false;
-
-            o = s.taboption('gaming', form.Value, 'smart_shaping_enable_delay_s',
-                _('Activation Delay (s)'),
-                _('Seconds of <em>continuous</em> latency-sensitive traffic required before ' +
-                  'CAKE shaping is engaged. Prevents a single DSCP-marked ' +
-                  'packet (e.g. a DNS reply, SIP register) from prematurely ' +
-                  'triggering the shaper. ' +
-                  '<br><strong>Recommended: 2–5 s.</strong>'));
-            o.datatype   = 'float';
-            o.default    = '3.0';
-            o.placeholder = '3.0';
-            o.depends('smart_shaping_enabled', '1');
-
-            o = s.taboption('gaming', form.Value, 'smart_shaping_disable_delay_s',
-                _('Deactivation Delay (s)'),
-                _('Seconds of silence (no sensitive packets seen) before the ' +
-                  'shaper is bypassed and full speed is restored. ' +
-                  'Prevents flapping during brief pauses in gaming ' +
-                  '(loading screens, respawn timers, etc.). ' +
-                  '<br><strong>Recommended: 10–30 s.</strong>'));
-            o.datatype   = 'float';
-            o.default    = '10.0';
-            o.placeholder = '10.0';
-            o.depends('smart_shaping_enabled', '1');
-
-            o = s.taboption('gaming', form.Value, 'gaming_rules_file',
-                _('Gaming Rules File'),
-                _('Path to a plain-text file of DSCP port-marking rules. ' +
-                  'The daemon reads this at startup, generates nftables rules ' +
-                  'that stamp game and VoIP packets with the correct DSCP values, ' +
-                  'and automatically derives the traffic-detection mask from ' +
-                  'whatever DSCP values appear in the file — no manual configuration needed.<br><br>' +
-                  'File format: <code>proto&nbsp;&nbsp;port-or-range&nbsp;&nbsp;dscp</code> per line.<br>' +
-                  'Example: <code>udp&nbsp;&nbsp;27015-27030&nbsp;&nbsp;ef</code><br>' +
-                  'Protocols: <code>udp</code>, <code>tcp</code>, <code>both</code>. ' +
-                  'DSCP names: <code>ef</code>, <code>cs4</code>, <code>cs5</code>, ' +
-                  '<code>af41</code>, <code>va</code>, or a raw value 0–63.<br>' +
-                  'Lines starting with <code>#</code> are comments and are ignored.<br>' +
-                  'A default file covering CS2, Valorant, CoD, Fortnite, Discord, ' +
-                  'Zoom, Teams and more ships at ' +
-                  '<code>/etc/darkmoon/gaming-ports.txt</code>.'));
-            o.placeholder = '/etc/darkmoon/gaming-ports.txt';
-            o.depends('smart_shaping_enabled', '1');
-
-            /* Offload option – only shown when the router actually supports it.
-             * offloadCap is read from the daemon status JSON at page load.
-             * 0 = no flowtable support → option hidden entirely.
-             * 1 = software flowtable  → show with "software" label.
-             * 2 = hardware PPE        → show with "hardware" label. */
-            if (offloadCap > 0) {
-                o = s.taboption('gaming', form.Flag,
-                    'smart_shaping_offload_enabled',
-                    _('Enable Offload When Idle'),
-                    _('When no game or VoIP traffic is detected, tear down CAKE ' +
-                      'and use <strong>' +
-                      (offloadCap === 2 ? 'hardware (PPE)' : 'software') +
-                      ' flow offload</strong> for maximum download speed. ' +
-                      'CAKE is automatically restored the moment gaming or VoIP ' +
-                      'traffic is detected.<br><br>' +
-                      '<strong>When active:</strong> CPU usage drops to near zero ' +
-                      'during downloads; bufferbloat control is inactive ' +
-                      '(only while idle — gaming sessions are always fully shaped).<br>' +
-                      'Set <em>lan_if</em> in Advanced if your LAN bridge is not ' +
-                      '<code>br-lan</code>.'));
-                o.default  = '0';
-                o.rmempty  = false;
-                o.depends('smart_shaping_enabled', '1');
-            }
 
             /* ════════════════════════════════════════════════
              * CAKE Qdisc tab
@@ -403,15 +296,6 @@ return view.extend({
              * ════════════════════════════════════════════════ */
 
             /* ── Pinger mode ──────────────────────────────── */
-            o = s.taboption('advanced', form.Value, 'lan_if',
-                _('LAN Interface'),
-                _('LAN bridge interface used for the flowtable offload device list. ' +
-                  'Only relevant when <em>Enable Offload When Idle</em> is active. ' +
-                  'Default: <code>br-lan</code>. Change only if your LAN bridge ' +
-                  'has a different name (check with <code>ip link show</code>).'));
-            o.placeholder = 'br-lan';
-            o.depends('smart_shaping_offload_enabled', '1');
-
             o = s.taboption('advanced', form.ListValue, 'ping_type',
                 _('Ping Type'),
                 _('ICMP packet type used for OWD measurement.<br>' +

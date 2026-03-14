@@ -97,11 +97,6 @@ define Package/darkmoon/install
 	$(INSTALL_DATA) \
 		$(PKG_ROOT)/luci-app-darkmoon/www/luci-static/resources/view/status/include/75_darkmoon.js \
 		$(1)/www/luci-static/resources/view/status/include/
-
-	$(INSTALL_DIR) $(1)/etc/darkmoon
-	$(INSTALL_DATA) \
-		$(PKG_ROOT)/root/etc/darkmoon/gaming-ports.txt \
-		$(1)/etc/darkmoon/
 endef
 
 $(eval $(call BuildPackage,darkmoon))

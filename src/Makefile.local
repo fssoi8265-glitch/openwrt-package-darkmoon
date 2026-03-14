@@ -2,7 +2,7 @@ CC      ?= gcc
 CFLAGS  ?= -O2 -pipe -Wall -Wextra -std=c11
 LDFLAGS ?= -lubox -luci
 
-SRCS = main.c config.c rate_monitor.c tc_netlink.c traffic_detector.c
+SRCS = main.c config.c rate_monitor.c tc_netlink.c
 OBJS = $(SRCS:.c=.o)
 BIN  = darkmoon
 
@@ -20,8 +20,7 @@ clean:
 	rm -f $(OBJS) $(BIN)
 
 # Header dependencies
-main.o:         main.c config.h rate_monitor.h tc_netlink.h traffic_detector.h
+main.o:         main.c config.h rate_monitor.h tc_netlink.h
 config.o:       config.c config.h tc_netlink.h
 rate_monitor.o: rate_monitor.c rate_monitor.h
 tc_netlink.o:   tc_netlink.c tc_netlink.h
-traffic_detector.o: traffic_detector.c traffic_detector.h

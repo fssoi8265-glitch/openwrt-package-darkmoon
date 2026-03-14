@@ -69,24 +69,9 @@ function buildStatsTable(st) {
     var owdDlStyle = (st.avg_owd_dl_ms10 > 100) ? 'color:#c00' : 'color:#555';
     var owdUlStyle = (st.avg_owd_ul_ms10 > 100) ? 'color:#c00' : 'color:#555';
 
-    /* Smart shaping status cell */
-    var ssCell;
-    if (!st.smart_shaping_enabled) {
-        ssCell = E('td', { 'class': 'td', 'style': 'color:#888' }, _('Off'));
-    } else if (st.shaping_bypassed) {
-        ssCell = E('td', { 'class': 'td', 'style': 'color:#1a7f1a;font-weight:bold' },
-                   st.offload_active
-                       ? (st.offload_capability === 2 ? _('HW Offload') : _('SW Offload'))
-                       : _('Idle'));
-    } else {
-        ssCell = E('td', { 'class': 'td', 'style': 'color:#c07700;font-weight:bold' },
-                   _('Active'));
-    }
-
     return E('table', { 'class': 'table', 'id': 'darkmoon_status_table' }, [
         E('tr', { 'class': 'tr table-titles' }, [
             E('th', { 'class': 'th' }, _('Status')),
-            E('th', { 'class': 'th' }, _('Smart')),
             E('th', { 'class': 'th' }, _('DL Shaped')),
             E('th', { 'class': 'th' }, _('DL Actual')),
             E('th', { 'class': 'th' }, _('DL Load')),
@@ -99,7 +84,6 @@ function buildStatsTable(st) {
         ]),
         E('tr', { 'class': 'tr' }, [
             E('td', { 'class': 'td', 'style': 'font-weight:bold;color:' + color }, label),
-            ssCell,
             E('td', { 'class': 'td', 'style': 'font-weight:bold' }, fmtKbps(st.shaper_dl_kbps)),
             E('td', { 'class': 'td', 'style': 'color:#555' },       fmtKbps(st.achieved_dl_kbps)),
             loadCell(st.load_dl, st.bb_dl),
