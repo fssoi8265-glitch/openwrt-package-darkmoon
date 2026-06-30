@@ -1,4 +1,4 @@
-name:Fssol and Release Packages
+name: Build and Release Packages
 
 on:
   push:
@@ -17,16 +17,16 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - 25.12.5
+          - 25.12.0
           - 24.10.0
 
         arch:
-          # ARM64
+          # High-Performance ARM
           - aarch64_cortex-a53
           - aarch64_cortex-a72
           - aarch64_generic
 
-          # ARM32
+          # 32-bit ARM
           - arm_cortex-a7_neon-vfpv4
           - arm_cortex-a9_vfpv3-d16
           - arm_cortex-a15_neon-vfpv4
@@ -39,33 +39,33 @@ jobs:
           - x86_64
 
     steps:
-      - name: Checkout source
+      - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Build package
+      - name: Build with OpenWrt SDK
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.version }}
           PACKAGES: darkmoon
           IGNORE_ERRORS: 0
 
-      - name: Collect packages
+      - name: Collect Packages
         run: |
           mkdir -p dist
+          find bin/packages/ -type f \( -name "*darkmoon*.apk" -o -name "*darkmoon*.ipk" \) | while read file; do
+            filename=$(basename "$file")
+            cp "$file" "dist/${{ matrix.arch }}_${filename}"
+          done
 
-          find bin/packages -type f \
-            \( -name "*.apk" -o -name "*.ipk" \) \
-            | while read file; do
-                cp "$file" "dist/${{ matrix.arch }}_$(basename "$file")"
-              done
-
-      - name: Upload Artifact
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: darkmoon-${{ matrix.arch }}-${{ matrix.version }}
           path: dist/*
 
-      - name: Publish Release
+      - name: Add to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
